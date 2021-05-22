@@ -1,17 +1,37 @@
 use std::path::Path;
 
 fn main() {
-    let img_data = read_png();
-    let (max, reds, greens, blues) = count(&img_data);
-    let histogram = generate_image(max, &reds, &greens, &blues);
-    write_png("testogram.png", &histogram, 256, 192);
+    let files: Vec<String> = std::env::args().skip(1).collect();
+
+    if files.len() == 0 {
+        eprintln!("Usage: colorogram <png1> <png2> ...");
+        return;
+    }
+
+    for file in files {
+        make_histogram(file);
+    }
 }
 
-fn read_png() -> Vec<u8> {
+fn make_histogram<P: AsRef<Path>>(fname: P) {
+    let file = fname.as_ref();
+    let mut ofile = file.to_path_buf();
+    ofile.set_file_name(format!(
+        "{}_histogram.png",
+        file.file_stem().unwrap().to_string_lossy()
+    ));
+
+    let img_data = read_png(file);
+    let (max, reds, greens, blues) = count(&img_data);
+    let histogram = generate_image(max, &reds, &greens, &blues);
+    write_png(ofile, &histogram, 256, 192);
+}
+
+fn read_png<P: AsRef<Path>>(fname: P) -> Vec<u8> {
     use png::Decoder;
     use std::fs::File;
 
-    let decoder = Decoder::new(File::open("test.png").unwrap());
+    let decoder = Decoder::new(File::open(fname).unwrap());
     let (info, mut reader) = decoder.read_info().unwrap();
     let mut buffer = vec![0; info.buffer_size()];
     reader.next_frame(&mut buffer).unwrap();
