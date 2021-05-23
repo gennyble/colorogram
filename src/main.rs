@@ -1,3 +1,4 @@
+use image::{io::Reader as ImageReader, ImageBuffer, Rgb};
 use std::path::Path;
 
 fn main() {
@@ -21,37 +22,45 @@ fn make_histogram<P: AsRef<Path>>(fname: P) {
         file.file_stem().unwrap().to_string_lossy()
     ));
 
-    let img_data = read_png(file);
+    let img_data = if let Some(data) = read_png(file) {
+        data
+    } else {
+        return;
+    };
+
     let (max, reds, greens, blues) = count(&img_data);
     let histogram = generate_image(max, &reds, &greens, &blues);
-    write_png(ofile, &histogram, 256, 192);
+    write_png(ofile, histogram);
 }
 
-fn read_png<P: AsRef<Path>>(fname: P) -> Vec<u8> {
-    use png::Decoder;
-    use std::fs::File;
+fn read_png<P: AsRef<Path>>(fname: P) -> Option<Vec<u8>> {
+    let img = match ImageReader::open(fname.as_ref()) {
+        Ok(read_img) => match read_img.decode() {
+            Ok(decoded) => decoded,
+            Err(_e) => {
+                eprintln!(
+                    "colorogram: Failed to decode image '{}'",
+                    fname.as_ref().to_string_lossy()
+                );
+                return None;
+            }
+        },
+        Err(_e) => {
+            eprintln!(
+                "towebp: Failed to read image '{}'",
+                fname.as_ref().to_string_lossy()
+            );
+            return None;
+        }
+    }
+    .to_rgb8();
 
-    let decoder = Decoder::new(File::open(fname).unwrap());
-    let (info, mut reader) = decoder.read_info().unwrap();
-    let mut buffer = vec![0; info.buffer_size()];
-    reader.next_frame(&mut buffer).unwrap();
-
-    buffer
+    Some(img.into_flat_samples().samples)
 }
 
-fn write_png<P: AsRef<Path>>(fname: P, data: &Vec<u8>, width: u32, height: u32) {
-    use png::Encoder;
-    use std::fs::File;
-    use std::io::BufWriter;
-
-    let mut encoder = Encoder::new(BufWriter::new(File::create(fname).unwrap()), width, height);
-    encoder.set_color(png::ColorType::RGB);
-    encoder.set_depth(png::BitDepth::Eight);
-
-    encoder
-        .write_header()
-        .unwrap()
-        .write_image_data(data)
+fn write_png<P: AsRef<Path>>(fname: P, imgbuf: ImageBuffer<Rgb<u8>, Vec<u8>>) {
+    imgbuf
+        .save_with_format(fname, image::ImageFormat::Png)
         .unwrap()
 }
 
@@ -79,12 +88,18 @@ fn count(data: &Vec<u8>) -> (f64, [f64; 256], [f64; 256], [f64; 256]) {
     (max, reds, greens, blues)
 }
 
-fn generate_image(max: f64, reds: &[f64; 256], greens: &[f64; 256], blues: &[f64; 256]) -> Vec<u8> {
+fn generate_image(
+    max: f64,
+    reds: &[f64; 256],
+    greens: &[f64; 256],
+    blues: &[f64; 256],
+) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
     let width = 256;
     let height = 192;
     let mut image = vec![0; width * height * 3];
 
     let mut draw = |channel: usize, x: usize, value: f64| {
+        //let col_height = (value.log(max) * height as f64) as usize;
         let col_height = ((value / max) * height as f64) as usize;
 
         for y_inverse in 0..col_height {
@@ -98,5 +113,5 @@ fn generate_image(max: f64, reds: &[f64; 256], greens: &[f64; 256], blues: &[f64
         draw(2, x, blues[x]);
     }
 
-    image
+    ImageBuffer::from_raw(width as u32, height as u32, image).unwrap()
 }
