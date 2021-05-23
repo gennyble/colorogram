@@ -98,12 +98,15 @@ fn make_lumetri_scope(img: &RgbImage) -> RgbImage {
     let mut greens = [0.0; 256];
     let mut blues = [0.0; 256];
 
-    let width_scale = 10;
-    let width = (img.width() / width_scale) as usize;
-    let height = 256;
+    let width = img.width() as usize;
+    let height = 2048;
     let mut buffer = vec![0; width * height * 3];
 
     for x in 0..img.width() {
+        reds = [0.0; 256];
+        greens = [0.0; 256];
+        blues = [0.0; 256];
+
         for y in 0..img.height() {
             let color = img.get_pixel(x, y);
             let (r, g, b) = (color.0[0], color.0[1], color.0[2]);
@@ -112,23 +115,23 @@ fn make_lumetri_scope(img: &RgbImage) -> RgbImage {
             blues[b as usize] += 1.0;
         }
 
-        if x % width_scale == width_scale - 1 {
-            let mut max = 0.0f64;
-            for x in 0..256 {
-                max = max.max(reds[x]).max(greens[x]).max(blues[x]);
-            }
+        let mut max = 0.0f64;
+        for x in 0..256 {
+            max = max.max(reds[x]).max(greens[x]).max(blues[x]);
+        }
 
-            let normalize = |val: f64| -> u8 { (val.log(max) * 256.0) as u8 };
+        let normalize = |val: f64| -> u8 { (val.log(max) * 255.0) as u8 };
+        //let normalize = |val: f64| -> u8 { ((val / max) * 256.0) as u8 };
 
-            let x = x / width_scale;
-            for y_inverse in 0..height {
-                buffer[((height - 1 - y_inverse) * width + x as usize) * 3] =
-                    normalize(reds[y_inverse]);
-                buffer[((height - 1 - y_inverse) * width + x as usize) * 3 + 1] =
-                    normalize(greens[y_inverse]);
-                buffer[((height - 1 - y_inverse) * width + x as usize) * 3 + 2] =
-                    normalize(blues[y_inverse]);
-            }
+        for y_inverse in 0..height {
+            let index = ((y_inverse as f64 / height as f64) * 255.0).round() as usize;
+            //let index = y_inverse;
+
+            buffer[((height - 1 - y_inverse) * width + x as usize) * 3] = normalize(reds[(index)]);
+            buffer[((height - 1 - y_inverse) * width + x as usize) * 3 + 1] =
+                normalize(greens[index]);
+            buffer[((height - 1 - y_inverse) * width + x as usize) * 3 + 2] =
+                normalize(blues[index]);
         }
     }
 
