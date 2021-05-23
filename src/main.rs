@@ -1,6 +1,8 @@
 use image::{io::Reader as ImageReader, ImageBuffer, Rgb};
 use std::path::Path;
 
+type RgbImage = ImageBuffer<Rgb<u8>, Vec<u8>>;
+
 fn main() {
     let files: Vec<String> = std::env::args().skip(1).collect();
 
@@ -10,7 +12,10 @@ fn main() {
     }
 
     for file in files {
-        make_histogram(file);
+        //make_histogram(file);
+        let img = read_png(file).unwrap();
+        let lumetri = make_lumetri_scope(&img);
+        write_png("test_lumetri.png", lumetri);
     }
 }
 
@@ -28,12 +33,12 @@ fn make_histogram<P: AsRef<Path>>(fname: P) {
         return;
     };
 
-    let (max, reds, greens, blues) = count(&img_data);
+    let (max, reds, greens, blues) = count_whole_image(&img_data.into_flat_samples().samples);
     let histogram = generate_image(max, &reds, &greens, &blues);
     write_png(ofile, histogram);
 }
 
-fn read_png<P: AsRef<Path>>(fname: P) -> Option<Vec<u8>> {
+fn read_png<P: AsRef<Path>>(fname: P) -> Option<RgbImage> {
     let img = match ImageReader::open(fname.as_ref()) {
         Ok(read_img) => match read_img.decode() {
             Ok(decoded) => decoded,
@@ -55,16 +60,16 @@ fn read_png<P: AsRef<Path>>(fname: P) -> Option<Vec<u8>> {
     }
     .to_rgb8();
 
-    Some(img.into_flat_samples().samples)
+    Some(img)
 }
 
-fn write_png<P: AsRef<Path>>(fname: P, imgbuf: ImageBuffer<Rgb<u8>, Vec<u8>>) {
+fn write_png<P: AsRef<Path>>(fname: P, imgbuf: RgbImage) {
     imgbuf
         .save_with_format(fname, image::ImageFormat::Png)
         .unwrap()
 }
 
-fn count(data: &Vec<u8>) -> (f64, [f64; 256], [f64; 256], [f64; 256]) {
+fn count_whole_image(data: &Vec<u8>) -> (f64, [f64; 256], [f64; 256], [f64; 256]) {
     let mut reds = [0.0; 256];
     let mut greens = [0.0; 256];
     let mut blues = [0.0; 256];
@@ -88,12 +93,54 @@ fn count(data: &Vec<u8>) -> (f64, [f64; 256], [f64; 256], [f64; 256]) {
     (max, reds, greens, blues)
 }
 
+fn make_lumetri_scope(img: &RgbImage) -> RgbImage {
+    let mut reds = [0.0; 256];
+    let mut greens = [0.0; 256];
+    let mut blues = [0.0; 256];
+
+    let width_scale = 10;
+    let width = (img.width() / width_scale) as usize;
+    let height = 256;
+    let mut buffer = vec![0; width * height * 3];
+
+    for x in 0..img.width() {
+        for y in 0..img.height() {
+            let color = img.get_pixel(x, y);
+            let (r, g, b) = (color.0[0], color.0[1], color.0[2]);
+            reds[r as usize] += 1.0;
+            greens[g as usize] += 1.0;
+            blues[b as usize] += 1.0;
+        }
+
+        if x % width_scale == width_scale - 1 {
+            let mut max = 0.0f64;
+            for x in 0..256 {
+                max = max.max(reds[x]).max(greens[x]).max(blues[x]);
+            }
+
+            let normalize = |val: f64| -> u8 { (val.log(max) * 256.0) as u8 };
+
+            let x = x / width_scale;
+            for y_inverse in 0..height {
+                buffer[((height - 1 - y_inverse) * width + x as usize) * 3] =
+                    normalize(reds[y_inverse]);
+                buffer[((height - 1 - y_inverse) * width + x as usize) * 3 + 1] =
+                    normalize(greens[y_inverse]);
+                buffer[((height - 1 - y_inverse) * width + x as usize) * 3 + 2] =
+                    normalize(blues[y_inverse]);
+            }
+        }
+    }
+
+    ImageBuffer::from_raw(width as u32, height as u32, buffer).unwrap()
+}
+
 fn generate_image(
     max: f64,
     reds: &[f64; 256],
     greens: &[f64; 256],
     blues: &[f64; 256],
-) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+) -> RgbImage {
     let width = 256;
     let height = 192;
     let mut image = vec![0; width * height * 3];
