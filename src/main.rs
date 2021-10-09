@@ -81,7 +81,7 @@ fn count_whole_image(data: &[u8]) -> (f64, [f64; 256], [f64; 256], [f64; 256]) {
             blues[*value as usize] += 1.0;
         }
     }
-    println!("Took {}s to count image", start.elapsed().as_secs_f32());
+    //println!("Took {}s to count image", start.elapsed().as_secs_f32());
 
     // find the max in the channels
     let mut max = 0.0f64;
