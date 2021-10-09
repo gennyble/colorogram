@@ -1,44 +1,47 @@
-use image::{io::Reader as ImageReader, ImageBuffer, Rgb};
-use std::path::Path;
+mod image;
+
+use crate::image::Image;
+use ::image::{io::Reader as ImageReader, ImageBuffer, Rgb};
+use std::{path::Path, time::Instant};
 
 type RgbImage = ImageBuffer<Rgb<u8>, Vec<u8>>;
 
 fn main() {
-    let files: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<String> = std::env::args().skip(1).collect();
 
-    if files.len() == 0 {
-        eprintln!("Usage: colorogram <png1> <png2> ...");
+    if args.len() < 2 || args.contains(&"-h".into()) || args.contains(&"--help".into()) {
+        eprintln!("Usage: colorogram <input path> <output path>");
         return;
     }
 
-    for file in files {
-        //make_histogram(file);
-        let img = read_png(file).unwrap();
-        let lumetri = make_lumetri_scope(&img);
-        write_png("test_lumetri.png", lumetri);
-    }
-}
+    let input = &args[0];
+    let output = &args[1];
 
-fn make_histogram<P: AsRef<Path>>(fname: P) {
-    let file = fname.as_ref();
-    let mut ofile = file.to_path_buf();
-    ofile.set_file_name(format!(
-        "{}_histogram.png",
-        file.file_stem().unwrap().to_string_lossy()
-    ));
-
-    let img_data = if let Some(data) = read_png(file) {
+    let data = if let Some(data) = read_image(&input) {
         data
     } else {
+        eprintln!("colorogram: File '{}' not found", input);
         return;
     };
 
-    let (max, reds, greens, blues) = count_whole_image(&img_data.into_flat_samples().samples);
-    let histogram = generate_image(max, &reds, &greens, &blues);
-    write_png(ofile, histogram);
+    let histogram = make_histogram(&data, data.width() as usize, (data.height() / 4) as usize);
+
+    let histo_image: Image = histogram.into();
+    let mut image: Image = data.into();
+    let old_dims = image.resize_canvas((
+        image.dimensions().width,
+        image.dimensions().height + histo_image.dimensions().height,
+    ));
+    image.draw_image(&histo_image, (0, old_dims.height));
+    image.save(output).unwrap();
 }
 
-fn read_png<P: AsRef<Path>>(fname: P) -> Option<RgbImage> {
+fn make_histogram(img: &RgbImage, width: usize, height: usize) -> RgbImage {
+    let (max, reds, greens, blues) = count_whole_image(img.as_flat_samples().samples);
+    generate_histogram_image(max, &reds, &greens, &blues, width, height)
+}
+
+fn read_image<P: AsRef<Path>>(fname: P) -> Option<RgbImage> {
     let img = match ImageReader::open(fname.as_ref()) {
         Ok(read_img) => match read_img.decode() {
             Ok(decoded) => decoded,
@@ -52,7 +55,7 @@ fn read_png<P: AsRef<Path>>(fname: P) -> Option<RgbImage> {
         },
         Err(_e) => {
             eprintln!(
-                "towebp: Failed to read image '{}'",
+                "colorogram: Failed to read image '{}'",
                 fname.as_ref().to_string_lossy()
             );
             return None;
@@ -63,17 +66,12 @@ fn read_png<P: AsRef<Path>>(fname: P) -> Option<RgbImage> {
     Some(img)
 }
 
-fn write_png<P: AsRef<Path>>(fname: P, imgbuf: RgbImage) {
-    imgbuf
-        .save_with_format(fname, image::ImageFormat::Png)
-        .unwrap()
-}
-
-fn count_whole_image(data: &Vec<u8>) -> (f64, [f64; 256], [f64; 256], [f64; 256]) {
+fn count_whole_image(data: &[u8]) -> (f64, [f64; 256], [f64; 256], [f64; 256]) {
     let mut reds = [0.0; 256];
     let mut greens = [0.0; 256];
     let mut blues = [0.0; 256];
 
+    let start = Instant::now();
     for (index, value) in data.iter().enumerate() {
         if index % 3 == 0 {
             reds[*value as usize] += 1.0;
@@ -83,6 +81,7 @@ fn count_whole_image(data: &Vec<u8>) -> (f64, [f64; 256], [f64; 256], [f64; 256]
             blues[*value as usize] += 1.0;
         }
     }
+    println!("Took {}s to count image", start.elapsed().as_secs_f32());
 
     // find the max in the channels
     let mut max = 0.0f64;
@@ -93,13 +92,16 @@ fn count_whole_image(data: &Vec<u8>) -> (f64, [f64; 256], [f64; 256], [f64; 256]
     (max, reds, greens, blues)
 }
 
-fn make_lumetri_scope(img: &RgbImage) -> RgbImage {
-    let mut reds = [0.0; 256];
-    let mut greens = [0.0; 256];
-    let mut blues = [0.0; 256];
+// Something about lumetri
+// https://wildflourmedia.com/blog/lumetri-scopes-curves
+fn make_waveform_graph(img: &RgbImage, width: usize, height: usize) -> RgbImage {
+    let mut reds;
+    let mut greens;
+    let mut blues;
 
+    //let width_scale = 10;
     let width = img.width() as usize;
-    let height = 2048;
+    let height = img.height() as usize;
     let mut buffer = vec![0; width * height * 3];
 
     for x in 0..img.width() {
@@ -115,6 +117,7 @@ fn make_lumetri_scope(img: &RgbImage) -> RgbImage {
             blues[b as usize] += 1.0;
         }
 
+        //if x % width_scale == 9 {
         let mut max = 0.0f64;
         for x in 0..256 {
             max = max.max(reds[x]).max(greens[x]).max(blues[x]);
@@ -125,42 +128,53 @@ fn make_lumetri_scope(img: &RgbImage) -> RgbImage {
 
         for y_inverse in 0..height {
             let index = ((y_inverse as f64 / height as f64) * 255.0).round() as usize;
-            //let index = y_inverse;
 
+            //let x = x / width_scale;
             buffer[((height - 1 - y_inverse) * width + x as usize) * 3] = normalize(reds[(index)]);
             buffer[((height - 1 - y_inverse) * width + x as usize) * 3 + 1] =
                 normalize(greens[index]);
             buffer[((height - 1 - y_inverse) * width + x as usize) * 3 + 2] =
                 normalize(blues[index]);
         }
+        // }
     }
 
     ImageBuffer::from_raw(width as u32, height as u32, buffer).unwrap()
 }
 
-fn generate_image(
+fn generate_histogram_image(
     max: f64,
     reds: &[f64; 256],
     greens: &[f64; 256],
     blues: &[f64; 256],
+    width: usize,
+    height: usize,
 ) -> RgbImage {
-    let width = 256;
-    let height = 192;
     let mut image = vec![0; width * height * 3];
 
-    let mut draw = |channel: usize, x: usize, value: f64| {
-        //let col_height = (value.log(max) * height as f64) as usize;
-        let col_height = ((value / max) * height as f64) as usize;
+    let lerp = |from: f64, to: f64, howfar: f32| from + (to - from) * howfar as f64;
 
-        for y_inverse in 0..col_height {
-            image[((height - 1 - y_inverse) * width + x) * 3 + channel] = 255;
+    let mut channel = |channel: usize, x: usize, lereped_value: f64| {
+        let col_height = ((lereped_value / max) * height as f64) as usize;
+
+        for y in height - col_height..height {
+            image[(y * width + x) * 3 + channel] = 255;
         }
     };
 
-    for x in 0..256 {
-        draw(0, x, reds[x]);
-        draw(1, x, greens[x]);
-        draw(2, x, blues[x]);
+    for col in 0..255 {
+        let low = (((width as f32) / 255.0) * col as f32) as u32;
+        let high = ((width as f32 / 255.0) * (col + 1) as f32) as u32;
+        let pixel_count = high - low;
+
+        for x_off in 0..pixel_count {
+            let x = (x_off + low) as usize;
+            let percent = x_off as f32 / pixel_count as f32;
+
+            channel(0, x, lerp(reds[col], reds[col + 1], percent));
+            channel(1, x, lerp(greens[col], greens[col + 1], percent));
+            channel(2, x, lerp(blues[col], blues[col + 1], percent));
+        }
     }
 
     ImageBuffer::from_raw(width as u32, height as u32, image).unwrap()
